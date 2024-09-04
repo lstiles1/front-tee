@@ -20,7 +20,7 @@ const Customizer = () => {
 
   const [activeEditorTab, setActiveEditorTab] = useState("");
   const [activeFilterTab, setActiveFilterTab] = useState({
-    logoShirt: true,
+    logoShirt: false,
     stylishShirt: false,
   });
 
