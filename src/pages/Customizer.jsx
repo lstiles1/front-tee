@@ -52,7 +52,10 @@ const Customizer = () => {
   };
 
   const handleSubmit = async (type) => {
-    if (!prompt) return alert("Please enter a prompt");
+    if (!prompt.trim()) {
+      alert("Please enter a prompt to generate your design");
+      return;
+    }
 
     try {
       setGeneratingImg(true);
@@ -67,11 +70,21 @@ const Customizer = () => {
         }),
       });
 
+      if (!response.ok) {
+        throw new Error('Failed to generate image. Please try again.');
+      }
+
       const data = await response.json();
 
+      if (!data.photo) {
+        throw new Error('No image was generated. Please try a different prompt.');
+      }
+
       handleDecals(type, `data:image/png;base64,${data.photo}`);
+      setPrompt(''); // Clear prompt after successful generation
     } catch (error) {
-      alert(error);
+      alert(error.message || 'An error occurred. Please try again.');
+      console.error('AI generation error:', error);
     } finally {
       setGeneratingImg(false);
       setActiveEditorTab("");
@@ -148,9 +161,9 @@ const Customizer = () => {
           >
             <CustomButton
               type="filled"
-              title="Go Back"
+              title="← Back to Home"
               handleClick={() => (state.intro = true)}
-              customStyles="w-fit px-4 py-2.5 font-bold text-sm"
+              customStyles="w-fit px-5 py-2.5 font-bold text-sm shadow-lg"
             />
           </motion.div>
 
@@ -167,12 +180,20 @@ const Customizer = () => {
                   handleClick={() => handleActiveFilterTab(tab.name)}
                 />
                 {tab.name === "stylishShirt" && (
-                  <button className="download-btn" onClick={downloadCanvasToImage}>
+                  <button 
+                    className="download-btn group relative" 
+                    onClick={downloadCanvasToImage}
+                    aria-label="Download design"
+                    title="Download your design"
+                  >
                     <img
                       src={download}
                       alt="download_image"
-                      className="w-3/5 h-3/5 object-contain"
+                      className="w-3/5 h-3/5 object-contain transition-transform duration-300 group-hover:scale-110"
                     />
+                    <span className="absolute -top-10 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-xs px-2 py-1 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+                      Download
+                    </span>
                   </button>
                 )}
               </div>
