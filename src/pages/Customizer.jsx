@@ -60,34 +60,213 @@ const Customizer = () => {
     try {
       setGeneratingImg(true);
 
-      const response = await fetch('https://tshirt-98db.onrender.com/api/v1/ai', {
+      // Add timeout to prevent hanging requests
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+
+      const url = 'https://ai-text-to-image-generator-flux-free-api.p.rapidapi.com/aaaaaaaaaaaaaaaaaiimagegenerator/fluximagegenerate/generateimage.php';
+      
+      const response = await fetch(url, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
+          'x-rapidapi-key': 'b97671c5fcmsh841af94efe540cep12c36ajsn6daeb8f681b7',
+          'x-rapidapi-host': 'ai-text-to-image-generator-flux-free-api.p.rapidapi.com',
+          'Content-Type': 'application/x-www-form-urlencoded'
         },
-        body: JSON.stringify({
-          prompt,
+        body: new URLSearchParams({
+          prompt: prompt,
+          style_id: 4,
+          size: '1-1'
         }),
+        signal: controller.signal,
       });
 
+      clearTimeout(timeoutId);
+
       if (!response.ok) {
-        throw new Error('Failed to generate image. Please try again.');
+        let errorMessage = 'Failed to generate image. Please try again.';
+        
+        try {
+          const errorText = await response.text();
+          console.error('API Error Response:', response.status, errorText);
+          
+          if (response.status === 500) {
+            errorMessage = 'The AI service is currently unavailable. This might be temporary - please try again in a moment.';
+          } else if (response.status === 429) {
+            errorMessage = 'Too many requests. Please wait a moment and try again.';
+          } else if (response.status === 400) {
+            errorMessage = 'Invalid request. Please check your prompt and try again.';
+          } else if (response.status === 503) {
+            errorMessage = 'Service temporarily unavailable. The server may be starting up. Please wait a moment and try again.';
+          }
+        } catch (e) {
+          console.error('Error parsing error response:', e);
+        }
+        
+        throw new Error(errorMessage);
       }
 
-      const data = await response.json();
+      // The API returns binary image data directly (JPEG/PNG)
+      // Check if response looks like binary image data
+      const contentType = response.headers.get('content-type');
+      console.log('Response Content-Type:', contentType);
+      
+      // Get the response as array buffer to check the first bytes
+      const arrayBuffer = await response.arrayBuffer();
+      const uint8Array = new Uint8Array(arrayBuffer);
+      
+      // Check for image file signatures (JPEG starts with FF D8, PNG starts with 89 50 4E 47)
+      const isJPEG = uint8Array[0] === 0xFF && uint8Array[1] === 0xD8;
+      const isPNG = uint8Array[0] === 0x89 && uint8Array[1] === 0x50 && uint8Array[2] === 0x4E && uint8Array[3] === 0x47;
+      
+      if (isJPEG || isPNG || (contentType && contentType.startsWith('image/'))) {
+        console.log('Response is binary image data, converting to data URL...');
+        const blob = new Blob([arrayBuffer], { 
+          type: isJPEG ? 'image/jpeg' : isPNG ? 'image/png' : contentType || 'image/jpeg' 
+        });
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          console.log('Image converted successfully');
+          handleDecals(type, reader.result);
+          setPrompt('');
+        };
+        reader.onerror = () => {
+          console.error('FileReader error');
+          throw new Error('Failed to read image data');
+        };
+        reader.readAsDataURL(blob);
+        return; // Exit early since we're handling it asynchronously
+      }
+      
+      // Otherwise, try to parse as text (for JSON responses)
+      const decoder = new TextDecoder();
+      const result = decoder.decode(arrayBuffer);
+      console.log('API Response (text):', result.substring(0, 500));
+      console.log('API Response length:', result.length);
 
-      if (!data.photo) {
-        throw new Error('No image was generated. Please try a different prompt.');
+      // The response might be a URL, base64 image, JSON, or HTML
+      let imageUrl = null;
+      let imageData = null;
+      const trimmedResult = result.trim();
+
+      // Try to parse as JSON first
+      try {
+        const data = JSON.parse(trimmedResult);
+        console.log('Parsed as JSON:', data);
+        imageUrl = data.url || data.image || data.photo || data.image_url || data.data || data.result || data.imageUrl || data.imageURL;
+        imageData = data.base64 || data.image_base64 || data.base64Image || data.imageBase64;
+        
+        // Check nested objects
+        if (!imageUrl && !imageData && data.data) {
+          if (typeof data.data === 'string') {
+            imageUrl = data.data;
+          } else if (data.data.url) {
+            imageUrl = data.data.url;
+          }
+        }
+      } catch (e) {
+        console.log('Not JSON, trying other formats...');
+        
+        // Check if it's already a data URL
+        if (trimmedResult.startsWith('data:image')) {
+          imageData = trimmedResult;
+          console.log('Found data URL');
+        }
+        // Check if it's a plain URL (more flexible regex)
+        else if (trimmedResult.match(/^https?:\/\/[^\s]+/)) {
+          imageUrl = trimmedResult.match(/^https?:\/\/[^\s]+/)[0];
+          console.log('Found URL:', imageUrl);
+        }
+        // Check if it contains HTML with an image tag
+        else if (trimmedResult.includes('<img') || trimmedResult.includes('src=') || trimmedResult.includes('href=')) {
+          const imgMatch = trimmedResult.match(/(?:src|href)=["']([^"']+)["']/);
+          if (imgMatch && imgMatch[1].match(/https?:\/\//)) {
+            imageUrl = imgMatch[1];
+            console.log('Found URL in HTML:', imageUrl);
+          }
+        }
+        // Check if it contains a URL anywhere in the text
+        else {
+          const urlMatches = trimmedResult.match(/https?:\/\/[^\s<>"']+[^\s<>"',.]/g);
+          if (urlMatches && urlMatches.length > 0) {
+            // Prefer image URLs
+            const imageMatch = urlMatches.find(url => /\.(jpg|jpeg|png|gif|webp)/i.test(url));
+            imageUrl = imageMatch || urlMatches[0];
+            console.log('Found URL in text:', imageUrl);
+          }
+          // Check if it's base64 (longer strings of base64 characters)
+          else if (trimmedResult.length > 100 && trimmedResult.match(/^[A-Za-z0-9+/=\s]+$/)) {
+            // Remove whitespace and check if it looks like base64
+            const cleanBase64 = trimmedResult.replace(/\s/g, '');
+            if (cleanBase64.length > 50) {
+              imageData = `data:image/png;base64,${cleanBase64}`;
+              console.log('Found base64 string');
+            }
+          }
+        }
       }
 
-      handleDecals(type, `data:image/png;base64,${data.photo}`);
-      setPrompt(''); // Clear prompt after successful generation
+      // Handle the image data or URL
+      if (imageData) {
+        // We have direct image data
+        console.log('Using image data directly');
+        handleDecals(type, imageData);
+        setPrompt('');
+      } else if (imageUrl) {
+        // We have a URL, fetch and convert to base64
+        try {
+          console.log('Fetching image from URL:', imageUrl);
+          const imageResponse = await fetch(imageUrl, {
+            mode: 'cors',
+            headers: {
+              'Accept': 'image/*'
+            }
+          });
+          if (!imageResponse.ok) {
+            throw new Error(`Failed to fetch image: ${imageResponse.status} ${imageResponse.statusText}`);
+          }
+          const blob = await imageResponse.blob();
+          console.log('Image blob type:', blob.type);
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            console.log('Image loaded successfully');
+            handleDecals(type, reader.result);
+            setPrompt('');
+          };
+          reader.onerror = () => {
+            console.error('FileReader error');
+            throw new Error('Failed to read image data');
+          };
+          reader.readAsDataURL(blob);
+        } catch (e) {
+          console.error('Error fetching image:', e);
+          throw new Error(`Failed to load generated image: ${e.message}. Please try again.`);
+        }
+      } else {
+        // Couldn't parse the response - show full response in console
+        console.error('=== Unable to parse API response ===');
+        console.error('Full response:', result);
+        console.error('Response length:', result.length);
+        console.error('Response type:', typeof result);
+        console.error('First 1000 chars:', result.substring(0, 1000));
+        throw new Error('Unexpected response format from API. Check the browser console (F12) for details.');
+      }
     } catch (error) {
-      alert(error.message || 'An error occurred. Please try again.');
       console.error('AI generation error:', error);
-    } finally {
+      
+      let userMessage = error.message;
+      if (error.name === 'AbortError') {
+        userMessage = 'Request timed out. The AI service may be slow to respond. Please try again.';
+      }
+      
+      alert(userMessage || 'An error occurred. Please try again.');
       setGeneratingImg(false);
-      setActiveEditorTab("");
+    } finally {
+      // Don't close the tab immediately - let the image load first
+      setTimeout(() => {
+        setGeneratingImg(false);
+        setActiveEditorTab("");
+      }, 1000);
     }
   };
 
